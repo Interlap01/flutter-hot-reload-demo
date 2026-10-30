@@ -1,0 +1,26 @@
+{
+  "build": {
+    "android": {
+      "debug": {
+        "command": "fvm flutter build apk --debug",
+        "app": "build/app/outputs/flutter-apk/app-debug.apk"
+      },
+      "release": {
+        "command": "fvm flutter build appbundle --release",
+        "app": "build/app/outputs/bundle/release/app-release.aab"
+      }
+    },
+    "ios": {
+      "debug": {
+        "command": "fvm flutter build ios --simulator --debug",
+        "app": "build/ios/iphonesimulator/Runner.app"
+      },
+      "release": {
+        "command": "fvm flutter build ipa --export-options-plist \"$MOBAI_EXPORT_OPTIONS\"",
+        "app": "build/ios/ipa/*.ipa"
+      }
+    }
+  },
+  "name": "flutter_hot_reload_demo",
+  "project": "96d03f39-2e79-41b2-a77e-a30b0da0a6a8"
+}
