@@ -116,7 +116,10 @@ jobs:
           param ios_path         "$IN_IOS_PATH" '.ios.path' '.'
           param scheme           "$IN_SCHEME" '.ios.scheme' ''
           param duration         "$IN_DURATION" '""' '30m'
-          param flutter_version  "$IN_FLUTTER_VERSION" '.flutter.version' ''
+          # Else the Flutter the project pins with fvm.
+          FVM=$(jq -r '.flutter // empty' "$DIR/.fvmrc" 2>/dev/null || true)
+          [ -n "$FVM" ] || FVM=$(jq -r '.flutterSdkVersion // empty' "$DIR/.fvm/fvm_config.json" 2>/dev/null || true)
+          param flutter_version  "$IN_FLUTTER_VERSION" '.flutter.version' "$FVM"
           param jdk_version      "$IN_JDK_VERSION" '.kmp.jdkVersion' '17'
 
       # Starts the simulator booting in the background (cached, so later runs
@@ -247,6 +250,18 @@ jobs:
           flutter-version: ${{ steps.params.outputs.flutter_version || '' }}
           channel: stable
           cache: true
+
+      # A project pinned with fvm builds with `fvm flutter ...` (here and in
+      # mobai-ci's rebuilds): the runner has that Flutter but no fvm, so fvm
+      # passes through to it.
+      - name: Pass fvm through to Flutter
+        if: steps.detect.outputs.type == 'flutter'
+        run: |
+          command -v fvm >/dev/null && exit 0
+          mkdir -p "$RUNNER_TEMP/fvm-shim"
+          printf '%s\n' '#!/bin/bash' 'case "$1" in flutter|dart) c=$1; shift; exec "$c" "$@" ;; *) echo "fvm $1: only fvm flutter and fvm dart run here" >&2; exit 1 ;; esac' > "$RUNNER_TEMP/fvm-shim/fvm"
+          chmod +x "$RUNNER_TEMP/fvm-shim/fvm"
+          echo "$RUNNER_TEMP/fvm-shim" >> "$GITHUB_PATH"
 
       - name: Flutter pub get
         if: steps.detect.outputs.type == 'flutter'
