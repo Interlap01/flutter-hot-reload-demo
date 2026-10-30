@@ -13,7 +13,7 @@ on:
   # Pushing a tag named ios-share/<build-id> starts the same job without the
   # GitHub API, for environments where only git access is available. A push
   # event runs the workflow file from the tagged commit, and the parameters
-  # come from builder.json there. The tag is deleted when the job ends.
+  # come from mobai.json there. The tag is deleted when the job ends.
   push:
     tags:
       - 'ios-share/*'
@@ -80,7 +80,7 @@ jobs:
           echo "Building $(git rev-parse --short HEAD)"
 
       # Dispatch inputs arrive with their declared defaults. A tag push has no
-      # inputs, so the values come from builder.json in the tagged commit and
+      # inputs, so the values come from mobai.json in the tagged commit and
       # the build id is the tag name after the prefix.
       - name: Resolve parameters
         id: params
@@ -93,12 +93,20 @@ jobs:
           IN_JDK_VERSION: ${{ inputs.jdk_version }}
         run: |
           set -e
+          # The configuration: the nearest mobai.json at or above the project
+          # path, up to the repository root.
+          TOP=$(pwd -P)
+          DIR=$(cd "${IN_IOS_PATH:-.}" 2>/dev/null && pwd -P || echo "$TOP")
+          while [ ! -f "$DIR/mobai.json" ] && [ "$DIR" != "$TOP" ] && [ "$DIR" != / ]; do DIR=$(dirname "$DIR"); done
+          CONFIG="$DIR/mobai.json"
+          echo "config=$CONFIG" >> "$GITHUB_OUTPUT"
+          echo "config=$CONFIG"
           param() { # name dispatch-value jq-path default
             local v=""
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
               v="$2"
-            elif [ -f builder.json ]; then
-              v=$(jq -r "$3 // empty" builder.json)
+            elif [ -f "$CONFIG" ]; then
+              v=$(jq -r "$3 // empty" "$CONFIG")
             fi
             v="${v:-$4}"
             echo "$1=$v" >> "$GITHUB_OUTPUT"
@@ -521,7 +529,7 @@ jobs:
 
           ${JS_EXEC:-npx} expo prebuild --platform ios --no-install
           if [ -z "$(find "$IOS_PATH" -maxdepth 1 -name '*.xcodeproj' -print -quit 2>/dev/null)" ]; then
-            echo "::error::'expo prebuild' produced no Xcode project in '$IOS_PATH'. If the project generates it elsewhere, set ios.path in builder.json."
+            echo "::error::'expo prebuild' produced no Xcode project in '$IOS_PATH'. If the project generates it elsewhere, set ios.path in mobai.json."
             exit 1
           fi
 
@@ -538,6 +546,10 @@ jobs:
         if: steps.detect.outputs.type == 'kmp'
         uses: gradle/actions/setup-gradle@v6
 
+      # The build is written to a script first and run from there, so the
+      # sharing step can hand the same build to mobai-ci: the MobAI app then
+      # rebuilds newer code on this simulator exactly as this step built it.
+      # The script logs to stderr and prints only the app's path on stdout.
       - name: Build for the simulator
         id: build
         env:
@@ -546,6 +558,13 @@ jobs:
           PROJECT_TYPE: ${{ steps.detect.outputs.type }}
         run: |
           set -e
+          BUILD_SCRIPT="$RUNNER_TEMP/mobai-build.sh"
+          {
+            echo 'set -e'
+            printf 'IOS_PATH=%q SCHEME=%q PROJECT_TYPE=%q\n' "$IOS_PATH" "$SCHEME" "$PROJECT_TYPE"
+            cat <<'MOBAI_BUILD'
+          exec 3>&1 1>&2
+          cd "$GITHUB_WORKSPACE"
 
           if [ "$PROJECT_TYPE" = "flutter" ]; then
             # Flutter drives xcodebuild itself and puts the bundle in a known
@@ -651,7 +670,34 @@ jobs:
             exit 1
           fi
           echo "Built $APP_PATH"
+          case "$APP_PATH" in /*) ;; *) APP_PATH="$GITHUB_WORKSPACE/$APP_PATH" ;; esac
+          echo "$APP_PATH" >&3
+          MOBAI_BUILD
+          } > "$BUILD_SCRIPT"
+
+          # The debug build command committed in mobai.json (the nearest one
+          # at or above the iOS project) builds instead of the script, which
+          # stays the fallback. mobai-ci share reads the same file for
+          # rebuilds.
+          TOP=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          DIR=$(cd "$GITHUB_WORKSPACE/$IOS_PATH" 2>/dev/null && pwd -P || echo "$TOP")
+          while [ ! -f "$DIR/mobai.json" ] && [ "$DIR" != "$TOP" ] && [ "$DIR" != / ]; do DIR=$(dirname "$DIR"); done
+          CMD=$(jq -r '.build.ios.debug.command // empty' "$DIR/mobai.json" 2>/dev/null || true)
+          if [ -n "$CMD" ]; then
+            echo "Building with the command in $DIR/mobai.json: $CMD"
+            (cd "$DIR" && bash -c "$CMD")
+            APP=$(jq -r '.build.ios.debug.app // empty' "$DIR/mobai.json")
+            APP_PATH=$(cd "$DIR" && [ -n "$APP" ] && ls -td $APP 2>/dev/null | head -1 || true)
+            if [ -z "$APP_PATH" ]; then
+              echo "::error::The build in $DIR/mobai.json made nothing at its \"app\" path (${APP:-not set})"
+              exit 1
+            fi
+            case "$APP_PATH" in /*) ;; *) APP_PATH="$DIR/$APP_PATH" ;; esac
+          else
+            APP_PATH=$(bash "$BUILD_SCRIPT")
+          fi
           echo "app_path=$APP_PATH" >> $GITHUB_OUTPUT
+          echo "build_script=$BUILD_SCRIPT" >> $GITHUB_OUTPUT
 
       # Flutter builds through its own tree, so DerivedData can be absent and a
       # save would fail on a path that never existed.
@@ -673,16 +719,24 @@ jobs:
 
       # Installs the build on the simulator and publishes it to the MobAI app.
       # The step (and the job) stay running until the simulator is released
-      # there or goes unused.
+      # there or goes unused. The MobAI app may rebuild newer snapshots of the
+      # code with the same build, and run hot reload sessions, in this
+      # checkout.
       - name: Share the simulator
         env:
           MOBAI_API_KEY: ${{ secrets.MOBAI_API_KEY }}
         run: |
+          # A mobai-ci from before rebuilds refuses flags it does not know.
+          REBUILD=()
+          if mobai-ci share -help 2>&1 | grep -q -- '-rebuild'; then
+            REBUILD=(--dir "$GITHUB_WORKSPACE" --rebuild "bash ${{ steps.build.outputs.build_script }}")
+          fi
           mobai-ci share \
             --device "$MOBAI_SIM_UDID" \
             --app "${{ steps.build.outputs.app_path }}" \
             --duration "${{ steps.params.outputs.duration }}" \
             --label "${{ github.repository }} · ${{ steps.params.outputs.build_id }}" \
+            "${REBUILD[@]}" \
             --wait-device 4m --startup-timeout 5m
 
       # The tag exists only to start this run, so it leaves with it. Deleting
