@@ -258,8 +258,18 @@ jobs:
         if: steps.detect.outputs.type == 'flutter'
         run: |
           command -v fvm >/dev/null && exit 0
+          FLUTTER=$(command -v flutter)
+          VERSION=$(flutter --version --machine | jq -r .frameworkVersion)
           mkdir -p "$RUNNER_TEMP/fvm-shim"
-          printf '%s\n' '#!/bin/bash' 'case "$1" in flutter|dart) c=$1; shift; exec "$c" "$@" ;; *) echo "fvm $1: only fvm flutter and fvm dart run here" >&2; exit 1 ;; esac' > "$RUNNER_TEMP/fvm-shim/fvm"
+          cat > "$RUNNER_TEMP/fvm-shim/fvm" <<EOF
+          #!/bin/bash
+          case "\$1" in
+            flutter|dart) c=\$1; shift; exec "\$c" "\$@" ;;
+            api) if [ "\$2" = list ]; then echo '{"versions":[{"name":"$VERSION","flutterExec":"$FLUTTER"}]}'; exit 0; fi ;;
+          esac
+          echo "fvm \$1: only fvm flutter, fvm dart and fvm api list run here" >&2
+          exit 1
+          EOF
           chmod +x "$RUNNER_TEMP/fvm-shim/fvm"
           echo "$RUNNER_TEMP/fvm-shim" >> "$GITHUB_PATH"
 
