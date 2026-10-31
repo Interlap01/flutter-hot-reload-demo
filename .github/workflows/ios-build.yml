@@ -1056,9 +1056,12 @@ jobs:
               *'*'*) fail "The provisioning profile covers $PROFILE_BUNDLE_ID, a wildcard; the release command in $DIR/mobai.json exports with the app's own id. Use a profile for the app's bundle id." ;;
             esac
             # Expo's prebuild step above has made the project by now; one the
-            # command makes itself gets no profile, so say so.
-            if compgen -G "$GITHUB_WORKSPACE/$IOS_PATH/*.xcodeproj" > /dev/null; then
-              (cd "$GITHUB_WORKSPACE/$IOS_PATH" && apply_signing_to_app_target "$PROFILE_BUNDLE_ID")
+            # command makes itself gets no profile, so say so. A Flutter app's
+            # iOS path is its root, with the project in ios/.
+            XCODE_DIR="$GITHUB_WORKSPACE/$IOS_PATH"
+            compgen -G "$XCODE_DIR/*.xcodeproj" > /dev/null || XCODE_DIR="$XCODE_DIR/ios"
+            if compgen -G "$XCODE_DIR/*.xcodeproj" > /dev/null; then
+              (cd "$XCODE_DIR" && apply_signing_to_app_target "$PROFILE_BUNDLE_ID")
             else
               echo "::warning::No .xcodeproj in $IOS_PATH before the release command runs, so no target carries the provisioning profile"
             fi
