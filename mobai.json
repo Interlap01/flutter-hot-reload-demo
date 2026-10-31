@@ -8,6 +8,9 @@
   },
   "platform": "ios",
   "profiles": {
+    "development": {
+      "distribution": "development"
+    },
     "store": {
       "distribution": "store"
     }
