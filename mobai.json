@@ -1,0 +1,15 @@
+{
+  "github": {
+    "owner": "Interlap01",
+    "repo": "flutter-hot-reload-demo"
+  },
+  "ios": {
+    "bundleId": "run.mobai.flutterHotReloadDemo"
+  },
+  "platform": "ios",
+  "profiles": {
+    "store": {
+      "distribution": "store"
+    }
+  }
+}
